@@ -1,0 +1,112 @@
+name: Build JavaCard CAP files
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+
+permissions:
+  id-token: write
+  contents: read
+  attestations: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-24.05
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build all CAP files (first)
+        run: nix develop --command ant -DJCKIT=sdks/jc304_kit all
+
+      - name: Normalize and snapshot hashes
+        run: |
+          python3 tools/normalize-cap.py build/cap/*.cap --hash-lfd > /tmp/hashes-first.txt
+          cat /tmp/hashes-first.txt
+
+      - name: Clean and rebuild
+        run: nix develop --command ant clean all -DJCKIT=sdks/jc304_kit
+
+      - name: Normalize and verify reproducibility
+        run: |
+          python3 tools/normalize-cap.py build/cap/*.cap --hash-lfd > /tmp/hashes-second.txt
+          diff /tmp/hashes-first.txt /tmp/hashes-second.txt
+          echo "Reproducibility check passed: both builds produce identical CAP files"
+
+      - name: Attest CAP files
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            build/cap/TeapotApplet.cap
+            build/cap/MemoryCardApplet.cap
+            build/cap/SingleUseKeyApplet.cap
+            build/cap/BlindOracleApplet.cap
+            build/cap/SecureApplet.cap
+            build/cap/Bundle.cap
+
+      - name: Upload CAP artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cap-files
+          path: build/cap/*.cap
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cap-files
+          path: cap-files/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: cap-files/*.cap
+          generate_release_notes: true
+
+  prerelease:
+    needs: build
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cap-files
+          path: cap-files/
+
+      - name: Delete existing pre-release tag
+        run: git push origin :refs/tags/latest || true
+
+      - name: Create/update pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Development Build (master)"
+          body: |
+            Automated pre-release from master branch.
+            Commit: ${{ github.sha }}
+            Build: [View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          files: cap-files/*.cap
+          prerelease: true
+          make_latest: false
