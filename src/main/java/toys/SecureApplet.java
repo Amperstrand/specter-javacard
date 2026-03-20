@@ -45,6 +45,13 @@ import javacard.framework.*;
  * <li>TODO: {@code 05} - Wipe everything on the card. 
  */
 public class SecureApplet extends Applet{
+    /** Legacy behavior: initialize everything eagerly (original implementation). */
+    protected static final byte PROFILE_FULL = (byte)0x01;
+    /**
+     * Lean behavior for MemoryCardApplet on constrained cards:
+     * avoids eager `FiniteField` init and avoids secure-channel heavy allocations in constructors.
+     */
+    protected static final byte PROFILE_MEMORYCARD = (byte)0x02;
 
     /** Class code for secure applet */
     protected static final byte SECURE_CLA                      = (byte)0xB0;
@@ -66,6 +73,8 @@ public class SecureApplet extends Applet{
     protected static final byte INS_OPEN_SECURE_CHANNEL_EE_MODE = (byte)0xB5;
     protected static final byte INS_SECURE_MESSAGE              = (byte)0xB6;
     protected static final byte INS_CLOSE_CHANNEL               = (byte)0xB7;
+    /** Debug-only instruction: returns available memory (32-bit split into two shorts). */
+    protected static final byte INS_DEBUG_MEMORY              = (byte)0xB8;
 
     /* Commands transmitted over secure channel */
     protected static final byte CMD_ECHO                  = (byte)0x00;
@@ -137,6 +146,7 @@ public class SecureApplet extends Applet{
 
     protected TransientHeap heap;
     protected SecureChannel sc;
+    protected final byte profile;
 
     // Create an instance of the Applet subclass using its constructor, 
     // and to register the instance.
@@ -152,16 +162,33 @@ public class SecureApplet extends Applet{
         }
     }
     public SecureApplet(){
-        // maybe should be a parameter in the constructor?
-        heap = new TransientHeap(LENGTH_TRANSIENT_HEAP);
-        // Crypto primitives. 
-        // Keep it in this order.
-        FiniteField.init(heap);
-        Secp256k1.init(heap);
-        Crypto.init(heap);
-        sc = new SecureChannel(heap);
-        // maybe also should be a parameter in the constructor?
-        pin = new PinCode(PIN_MAX_COUNTER, PIN_MAX_LENGTH);
+        this(PROFILE_FULL);
+    }
+
+    /**
+     * @param profile controls how much crypto state is allocated in the constructor.
+     */
+    protected SecureApplet(byte profile){
+        this.profile = profile;
+        // Prefer CLEAR_ON_RESET for the MemoryCard profile to reduce deselect-pool pressure.
+        byte clearOn = (profile == PROFILE_MEMORYCARD) ? JCSystem.CLEAR_ON_RESET : JCSystem.CLEAR_ON_DESELECT;
+        heap = new TransientHeap(LENGTH_TRANSIENT_HEAP, clearOn);
+        // Default behavior: keep original eager init order.
+        if(profile == PROFILE_FULL){
+            // Crypto primitives.
+            // Keep it in this order.
+            FiniteField.init(heap);
+            Secp256k1.init(heap);
+            Crypto.init(heap);
+            sc = new SecureChannel(heap);
+            pin = new PinCode(PIN_MAX_COUNTER, PIN_MAX_LENGTH);
+        }else{
+            // Lean init: do not allocate `FiniteField`, do not create PIN object yet,
+            // and do not generate secure-channel static keypair in SecureChannel constructor.
+            sc = new SecureChannel(heap, profile);
+            pin = null;
+            pinIsSet = false;
+        }
     }
     /** Redefine this function in your applet to process secure message
      *  return number of bytes written in the buffer
@@ -248,6 +275,9 @@ public class SecureApplet extends Applet{
                 lock();
                 // close secure channel
                 sc.closeChannel();
+                break;
+            case INS_DEBUG_MEMORY:
+                len = debugMemory(buf, dataOff, dataLen);
                 break;
             default:
                 len = processPlainMessage(buf, dataLen);
@@ -417,6 +447,7 @@ public class SecureApplet extends Applet{
                 if(!pinIsSet){
                     ISOException.throwIt(ERR_NOT_INITIALIZED);
                 }
+                ensurePinInitialized();
                 if(len > (short)(PIN_MAX_LENGTH+LENGTH_CMD_SUBCMD)){
                     ISOException.throwIt(ERR_INVALID_LEN);
                 }
@@ -447,6 +478,7 @@ public class SecureApplet extends Applet{
                 if(!pinIsSet){
                     ISOException.throwIt(ERR_NOT_INITIALIZED);
                 }
+                ensurePinInitialized();
                 if(!pin.check(buf, oldPinOff, oldPinLen)){
                     ISOException.throwIt(ERR_INVALID_PIN);
                 }else{
@@ -459,6 +491,7 @@ public class SecureApplet extends Applet{
                 if(pinIsSet){
                     ISOException.throwIt(ERR_PIN_ALREADY_SET);
                 }
+                ensurePinInitialized();
                 if(len > (short)(PIN_MAX_LENGTH+LENGTH_CMD_SUBCMD)){
                     ISOException.throwIt(ERR_INVALID_LEN);
                 }
@@ -478,6 +511,7 @@ public class SecureApplet extends Applet{
                     if(len > (short)(PIN_MAX_LENGTH+LENGTH_CMD_SUBCMD)){
                         ISOException.throwIt(ERR_INVALID_LEN);
                     }
+                    ensurePinInitialized();
                     // verify PIN
                     if(!pin.check(buf, OFFSET_SECURE_PAYLOAD, (byte)(len-LENGTH_CMD_SUBCMD))){
                         ISOException.throwIt(ERR_INVALID_PIN);
@@ -498,6 +532,12 @@ public class SecureApplet extends Applet{
     protected void lock(){
         if(pinIsSet && pin.isValidated()){
             pin.reset();
+        }
+    }
+
+    protected void ensurePinInitialized(){
+        if(pin == null){
+            pin = new PinCode(PIN_MAX_COUNTER, PIN_MAX_LENGTH);
         }
     }
     protected short fillPinStatus(byte[] buf, short offset){
@@ -543,10 +583,62 @@ public class SecureApplet extends Applet{
      */
     protected short fillRandom(byte[] buf, short off, short len){
         // fill buffer with 32 bytes of random data
+        Crypto.ensureRandom();
         Crypto.random.generateData(buf, off, len);
         return len;
     }
     public void deselect() {
-        pin.reset();
+        if(pin != null){
+            pin.reset();
+        }
+    }
+
+    // ---- Debug-only helpers ----
+    /**
+     * Keep this off by default so production host behavior stays unchanged.
+     * Flip to `true` only for local J3R180 tuning.
+     */
+    private static final boolean DEBUG_MEMORY = false;
+
+    protected short debugMemory(byte[] buf, short dataOff, short dataLen){
+        if(!DEBUG_MEMORY){
+            ISOException.throwIt(ISO7816.SW_INS_NOT_SUPPORTED);
+        }
+
+        // Optional: first byte in payload can select an init stage (0 = memory only).
+        byte stage = (dataLen > 0) ? buf[dataOff] : (byte)0;
+
+        short lenOut = setResponseCode(RESPONSE_SUCCESS, buf);
+
+        // Snapshot before stage.
+        lenOut += writeMemoryType32(buf, lenOut, JCSystem.MEMORY_TYPE_PERSISTENT);
+        lenOut += writeMemoryType32(buf, lenOut, JCSystem.MEMORY_TYPE_TRANSIENT_RESET);
+        lenOut += writeMemoryType32(buf, lenOut, JCSystem.MEMORY_TYPE_TRANSIENT_DESELECT);
+
+        // Stage actions (intentionally small).
+        if(stage == (byte)1){
+            sc.ensureESCapabilities();
+        }else if(stage == (byte)2){
+            ensurePinInitialized();
+        }
+
+        // Snapshot after stage.
+        lenOut += writeMemoryType32(buf, lenOut, JCSystem.MEMORY_TYPE_PERSISTENT);
+        lenOut += writeMemoryType32(buf, lenOut, JCSystem.MEMORY_TYPE_TRANSIENT_RESET);
+        lenOut += writeMemoryType32(buf, lenOut, JCSystem.MEMORY_TYPE_TRANSIENT_DESELECT);
+        return lenOut;
+    }
+
+    /**
+     * Writes available memory as 32-bit value split into two big-endian shorts.
+     * @return number of bytes written (4)
+     */
+    private short writeMemoryType32(byte[] buf, short outOff, byte memoryType){
+        short[] tmp = JCSystem.makeTransientShortArray((short)2, JCSystem.CLEAR_ON_DESELECT);
+        JCSystem.getAvailableMemory(tmp, (short)0, memoryType);
+        // high then low
+        Util.setShort(buf, outOff, tmp[0]);
+        Util.setShort(buf, (short)(outOff + 2), tmp[1]);
+        return (short)4;
     }
 }

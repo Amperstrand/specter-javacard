@@ -76,6 +76,30 @@ public class Secp256k1 {
     static private TransientHeap heap;
 
     /**
+     * Minimal initialization needed by MemoryCard's ES-mode secure channel:
+     * - ECDH "plain x-coordinate" (ALG_EC_SVDP_DH_PLAIN)
+     * - ECDSA(SHA-256) signing
+     *
+     * Intentionally does NOT initialize:
+     * - FiniteField (used for low-S normalization)
+     * - ecMult (XY) or point-add helpers
+     */
+    static public void ensureSecureChannelESCapabilities(TransientHeap hp){
+        if(heap == null){
+            heap = hp;
+        }else{
+            // Keep heap in sync with the current applet's TransientHeap.
+            heap = hp;
+        }
+        if(ecMultX == null){
+            ecMultX = KeyAgreement.getInstance(KeyAgreement.ALG_EC_SVDP_DH_PLAIN, false);
+        }
+        if(sig == null){
+            sig = Signature.getInstance(Signature.ALG_ECDSA_SHA_256, false);
+        }
+    }
+
+    /**
      * Allocates objects needed by this class.
      * <p>
      * Must be invoked during the applet installation exactly 1 time.
@@ -551,6 +575,21 @@ public class Secp256k1 {
         sig.init(privateKey, Signature.MODE_SIGN);
         short len = sig.signPreComputedHash(msg, msgOffset, LENGTH_MESSAGE, out, outOffset);
         return (short)(len+setLowS(out, outOffset));
+    }
+
+    /**
+     * Secure-channel signing variant that skips low-S normalization.
+     * <p>
+     * specter-diy host-side normalizes signatures before verification, so
+     * this preserves functional compatibility while avoiding FiniteField/RSA init.
+     */
+    static public short signNoNormalize(
+                    ECPrivateKey privateKey,
+                    byte[] msg, short msgOffset,
+                    byte[] out, short outOffset)
+    {
+        sig.init(privateKey, Signature.MODE_SIGN);
+        return sig.signPreComputedHash(msg, msgOffset, LENGTH_MESSAGE, out, outOffset);
     }
     /**
      * Signs the message with the private key. The message should be already hashed.

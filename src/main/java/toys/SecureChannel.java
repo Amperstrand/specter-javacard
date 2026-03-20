@@ -65,30 +65,65 @@ public class SecureChannel{
     /** TransientHeap instance that is used to temporarly allocate memory
      *  for some internal operations. */
     private TransientHeap heap;
+    /** Behavior profile. Mirrors SecureApplet.PROFILE_* constants. */
+    private byte profile;
 
     /** Constructor for SecureChannel.
      *  @param hp - TransientHeap instance to use for internal temporary memory allocations. */
     public SecureChannel(TransientHeap hp){
-        heap = hp;
-        // generate random secret key for secure communication
-        staticKeyPair = Secp256k1.newKeyPair();
-        staticKeyPair.genKeyPair();
-        // generate random session key pair 
-        ephemeralPrivateKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KeyBuilder.LENGTH_EC_FP_256, false);
-        Secp256k1.setCommonCurveParameters(ephemeralPrivateKey);
-        iv = JCSystem.makeTransientByteArray(LENGTH_IV, JCSystem.CLEAR_ON_DESELECT);
+        this(hp, (byte)0x01);
+    }
 
+    /**
+     * @param hp transient heap to allocate internal scratch buffers
+     * @param profile behavior profile (SecureApplet.PROFILE_*)
+     */
+    public SecureChannel(TransientHeap hp, byte profile){
+        this.heap = hp;
+        this.profile = profile;
+
+        // Create lightweight transient state early.
+        // Heavy EC primitives are initialized lazily on first secure-channel operation.
+        byte clearOn = (profile == (byte)0x02) ? JCSystem.CLEAR_ON_RESET : JCSystem.CLEAR_ON_DESELECT;
+        iv = JCSystem.makeTransientByteArray(LENGTH_IV, clearOn);
+
+        // AES keys are stored in transient objects; using TRANSIENT_DESELECT keeps compilation portable.
         cardAESKey = (AESKey)KeyBuilder.buildKey(KeyBuilder.TYPE_AES_TRANSIENT_DESELECT, KeyBuilder.LENGTH_AES_256, false);
         hostAESKey = (AESKey)KeyBuilder.buildKey(KeyBuilder.TYPE_AES_TRANSIENT_DESELECT, KeyBuilder.LENGTH_AES_256, false);
-        hostMACKey = JCSystem.makeTransientByteArray(LENGTH_MAC_KEY, JCSystem.CLEAR_ON_DESELECT);
-        cardMACKey = JCSystem.makeTransientByteArray(LENGTH_MAC_KEY, JCSystem.CLEAR_ON_DESELECT);
-        // even though the channel is not open yet, we close it
-        // that overwrites all keys with random junk
-        closeChannel();
+
+        hostMACKey = JCSystem.makeTransientByteArray(LENGTH_MAC_KEY, clearOn);
+        cardMACKey = JCSystem.makeTransientByteArray(LENGTH_MAC_KEY, clearOn);
+
+        // Static EC keypair is generated lazily on first GET_CARD_PUBKEY / openChannel*.
+        staticKeyPair = null;
+        ephemeralPrivateKey = null;
+    }
+
+    protected void ensureStaticKeyPair(){
+        if(staticKeyPair == null){
+            staticKeyPair = Secp256k1.newKeyPair();
+            staticKeyPair.genKeyPair();
+        }
+    }
+
+    protected void ensureEphemeralPrivateKey(){
+        if(ephemeralPrivateKey == null){
+            ephemeralPrivateKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KeyBuilder.LENGTH_EC_FP_256, false);
+            Secp256k1.setCommonCurveParameters(ephemeralPrivateKey);
+        }
+    }
+
+    protected void ensureESCapabilities(){
+        // Only the minimal crypto required for specter-diy ES-mode secure channel.
+        Secp256k1.ensureSecureChannelESCapabilities(heap);
+        Crypto.ensureSha256();
+        Crypto.ensureRandom();
+        Crypto.ensureHmacSha256();
     }
     /** Get static public key of the channel generated in the constructor.
      *  @return static public key as ECPublicKey instance */
     public ECPublicKey getStaticPublicKey(){
+        ensureStaticKeyPair();
         return (ECPublicKey)staticKeyPair.getPublic();
     }
     /** Get static public key of the secure channel generated in the constructor
@@ -119,6 +154,8 @@ public class SecureChannel{
                                byte[] hostNonce,  short hostNonceOff,
                                byte[] cardNonce,  short cardNonceOff)
     {
+        ensureStaticKeyPair();
+        ensureESCapabilities();
         short len = MAX_LENGTH_KEY;
         short off = heap.allocate(len);
         short ecdhLen = Secp256k1.ecdh( (ECPrivateKey)staticKeyPair.getPrivate(), 
@@ -152,6 +189,8 @@ public class SecureChannel{
     public short openChannelES(byte[] hostPubkey, short hostPubkeyOff,
                                byte[] cardNonce,  short cardNonceOff)
     {
+        ensureStaticKeyPair();
+        ensureESCapabilities();
         short len = MAX_LENGTH_KEY;
         short off = heap.allocate(len);
         short ecdhLen = Secp256k1.ecdh( (ECPrivateKey)staticKeyPair.getPrivate(), 
@@ -184,9 +223,19 @@ public class SecureChannel{
                     byte[] hostPubkey, short hostPubkeyOff,
                     byte[] cardPubkey, short cardPubkeyOff)
     {
+        ensureEphemeralPrivateKey();
+        // ECDH in this implementation relies on ALG_EC_SVDP_DH_PLAIN.
+        Secp256k1.ensureSecureChannelESCapabilities(heap);
+        Crypto.ensureSha256();
+
         short len = MAX_LENGTH_KEY;
         short off = heap.allocate(len);
-        Secp256k1.generateRandomSecret(heap.buffer, off);
+        try{
+            Secp256k1.generateRandomSecret(heap.buffer, off);
+        }catch(Exception e){
+            // EE-mode depends on FiniteField init for random elements.
+            ISOException.throwIt((short)0x0406);
+        }
         ephemeralPrivateKey.setS(heap.buffer, off, Secp256k1.LENGTH_PRIVATE_KEY);
         short ecdhLen = Secp256k1.ecdh( ephemeralPrivateKey, 
                         hostPubkey, hostPubkeyOff, 
@@ -257,6 +306,7 @@ public class SecureChannel{
     public short authenticateData(byte[] data, short dataOffset, short dataLen, 
                                   byte[] out, short outOffset)
     {
+        Crypto.ensureHmacSha256();
         short len = Crypto.hmacSha256.getLength();
         short off = heap.allocate(len);
         Crypto.hmacSha256.init(cardMACKey, (short)0, (short)cardMACKey.length);
@@ -284,12 +334,21 @@ public class SecureChannel{
     public short signData(byte[] data, short dataOffset, short dataLen, 
                           byte[] out, short outOffset)
     {
+        ensureStaticKeyPair();
+        // Secure-channel signing must not use low-S normalization.
+        Secp256k1.ensureSecureChannelESCapabilities(heap);
+        Crypto.ensureSha256();
+
         short len = (short)Crypto.sha256.getLength();
         short off = heap.allocate(len);
 
         Crypto.sha256.reset();
         Crypto.sha256.doFinal(data, dataOffset, dataLen, heap.buffer, off);
-        short sigLen = Secp256k1.sign((ECPrivateKey)staticKeyPair.getPrivate(), heap.buffer, off, out, outOffset);
+        short sigLen = Secp256k1.signNoNormalize(
+                (ECPrivateKey)staticKeyPair.getPrivate(),
+                heap.buffer, off,
+                out, outOffset
+        );
         heap.free(len);
         return sigLen;
     }
@@ -305,6 +364,8 @@ public class SecureChannel{
     public short decryptMessage(byte[] ct, short ctOffset, short ctLen, 
                                 byte[] out, short outOffset)
     {
+        Crypto.ensureHmacSha256();
+        Crypto.ensureCipher();
         // message should contain at least one block
         // and cyphertext without MAC should be % LENGTH_AES_BLOCK
         if( (ctLen < (short)(LENGTH_AES_BLOCK+LENGTH_MAC)) || 
@@ -344,6 +405,8 @@ public class SecureChannel{
     public short encryptMessage(byte[] data, short offset, short dataLen, 
                                 byte[] cyphertext, short ctOffset)
     {
+        Crypto.ensureHmacSha256();
+        Crypto.ensureCipher();
         // check that plaintext will fit in max cyphertext length
         if(dataLen > MAX_LENGTH_PLAIN){
             ISOException.throwIt(ISO7816.SW_DATA_INVALID);
@@ -387,6 +450,7 @@ public class SecureChannel{
      * Overwrites all secret keys with random data.
      */
     public void closeChannel(){
+        Crypto.ensureRandom();
         // fill with random data to make sure that
         // nobody can talk to the card anymore
         Crypto.random.generateData(iv, (short)0, (short)iv.length);

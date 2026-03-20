@@ -21,14 +21,56 @@ public class Crypto{
     static public Cipher cipher;
     static private TransientHeap heap;
 
+    static public void setHeap(TransientHeap hp){
+        heap = hp;
+    }
+
     static public void init(TransientHeap hp){
         heap = hp;
-        random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
-        sha256 = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
-        sha512 = MessageDigest.getInstance(MessageDigest.ALG_SHA_512, false);
-        hmacSha256 = new HMACDigest(sha256, HMACDigest.ALG_SHA_256_BLOCK_SIZE);
-        hmacSha512 = new HMACDigest(sha512, HMACDigest.ALG_SHA_512_BLOCK_SIZE);
-        cipher = Cipher.getInstance(Cipher.ALG_AES_CBC_ISO9797_M2,false);
+        ensureRandom();
+        ensureSha256();
+        ensureSha512();
+        ensureHmacSha256();
+        ensureHmacSha512();
+        ensureCipher();
+    }
+
+    static public void ensureRandom(){
+        if(random == null){
+            random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
+        }
+    }
+
+    static public void ensureSha256(){
+        if(sha256 == null){
+            sha256 = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
+        }
+    }
+
+    static public void ensureSha512(){
+        if(sha512 == null){
+            sha512 = MessageDigest.getInstance(MessageDigest.ALG_SHA_512, false);
+        }
+    }
+
+    static public void ensureHmacSha256(){
+        if(hmacSha256 == null){
+            ensureSha256();
+            hmacSha256 = new HMACDigest(sha256, HMACDigest.ALG_SHA_256_BLOCK_SIZE);
+        }
+    }
+
+    static public void ensureHmacSha512(){
+        if(hmacSha512 == null){
+            ensureSha512();
+            hmacSha512 = new HMACDigest(sha512, HMACDigest.ALG_SHA_512_BLOCK_SIZE);
+        }
+    }
+
+    static public void ensureCipher(){
+        if(cipher == null){
+            cipher = Cipher.getInstance(Cipher.ALG_AES_CBC_ISO9797_M2,false);
+        }
     }
     /**
      * One-line PBKDF2 algorithm for Bitcoin stuff. Outputs 64 bytes.
@@ -49,6 +91,10 @@ public class Crypto{
                               byte[] salt, short sOff, short sLen,
                               short iterations,
                               byte[] out, short outOff) throws ISOException{
+        ensureSha512();
+        if(heap == null){
+            ISOException.throwIt(ISO7816.SW_UNKNOWN);
+        }
         if(iterations <= 0){
             ISOException.throwIt(ISO7816.SW_DATA_INVALID);
         }

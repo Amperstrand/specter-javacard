@@ -36,7 +36,7 @@ public class MemoryCardApplet extends SecureApplet{
         }
     }
     public MemoryCardApplet(){
-        super();
+        super(PROFILE_MEMORYCARD);
         secretData = new DataEntry(MAX_DATA_LENGTH);
     }
     protected short processSecureMessage(byte[] buf, short len){

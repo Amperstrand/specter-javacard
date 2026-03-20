@@ -33,10 +33,17 @@ public class TransientHeap{
      * @param maxSize - number of bytes to reserve.
      */
     public TransientHeap(short maxSize){
+        this(maxSize, JCSystem.CLEAR_ON_DESELECT);
+    }
+
+    /**
+     * @param clearOn  JCSystem.CLEAR_ON_DESELECT or JCSystem.CLEAR_ON_RESET
+     */
+    public TransientHeap(short maxSize, byte clearOn){
         // if maxSize < 0 -> throw error
-        buffer = JCSystem.makeTransientByteArray(maxSize, JCSystem.CLEAR_ON_DESELECT);
+        buffer = JCSystem.makeTransientByteArray(maxSize, clearOn);
         // because we want to keep it in RAM
-        cur = JCSystem.makeTransientShortArray((short)1, JCSystem.CLEAR_ON_DESELECT);
+        cur = JCSystem.makeTransientShortArray((short)1, clearOn);
         cur[CUR_OFFSET] = (short)0;
     }
     /**
