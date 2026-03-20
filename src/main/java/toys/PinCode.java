@@ -28,7 +28,7 @@ public class PinCode extends OwnerPIN{
         super(maxCounter, LENGTH_PIN_HMAC);
         secret = new byte[LENGTH_SECRET];
         Crypto.random.generateData(secret, (short)0, (short)secret.length);
-        hmacResult = JCSystem.makeTransientByteArray(LENGTH_PIN_HMAC, JCSystem.CLEAR_ON_DESELECT);
+        hmacResult = JCSystem.makeTransientByteArray(LENGTH_PIN_HMAC, JCSystem.CLEAR_ON_RESET);
     }
     public boolean check(byte[] buf, short off, byte len){
         Crypto.hmacSha256.init(secret, (short)0, (short)secret.length);

@@ -76,6 +76,36 @@ public class Secp256k1 {
     static private TransientHeap heap;
 
     /**
+     * Allocates only the objects needed for ES/SS secure channel:
+     * ECDH (x-coordinate only) and ECDSA signing.
+     * Does NOT allocate FiniteField-dependent objects (PLAIN_XY, PACE_GM, etc.)
+     */
+    static public void initCore(TransientHeap hp)
+    {
+        heap = hp;
+        if(ecMultX == null)
+            ecMultX = KeyAgreement.getInstance(KeyAgreement.ALG_EC_SVDP_DH_PLAIN, false);
+        if(sig == null)
+            sig = Signature.getInstance(Signature.ALG_ECDSA_SHA_256, false);
+    }
+    /**
+     * Allocates objects needed for point operations (Layer C).
+     * Creates ecMult (PLAIN_XY KeyAgreement) and tempPrivateKey.
+     * Does NOT allocate tempPoint, tempPublicKey, or ecAdd.
+     * Must be called after initCore().
+     * Idempotent.
+     */
+    static public void initPointOps(TransientHeap hp)
+    {
+        heap = hp;
+        if(ecMult == null)
+            ecMult = KeyAgreement.getInstance(ALG_EC_SVDP_DH_PLAIN_XY, false);
+        if(tempPrivateKey == null) {
+            tempPrivateKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KeyBuilder.LENGTH_EC_FP_256, false);
+            Secp256k1.setCommonCurveParameters(tempPrivateKey);
+        }
+    }
+    /**
      * Allocates objects needed by this class.
      * <p>
      * Must be invoked during the applet installation exactly 1 time.
@@ -83,24 +113,22 @@ public class Secp256k1 {
      */
     static public void init(TransientHeap hp)
     {
-        heap = hp;
-        ecMult = KeyAgreement.getInstance(ALG_EC_SVDP_DH_PLAIN_XY, false);
-        ecMultX = KeyAgreement.getInstance(KeyAgreement.ALG_EC_SVDP_DH_PLAIN, false);
-        // TODO: fails in the simulator, write implementation if not supported
+        initCore(hp);
+        initPointOps(hp);
         try {
-            ecAdd = KeyAgreement.getInstance(ALG_EC_PACE_GM, false);
+            if(ecAdd == null)
+                ecAdd = KeyAgreement.getInstance(ALG_EC_PACE_GM, false);
         } catch (Exception e) {
             // nothing here yet :(
         }
-        sig = Signature.getInstance(Signature.ALG_ECDSA_SHA_256, false);
-
-        tempPrivateKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KeyBuilder.LENGTH_EC_FP_256, false);
-        Secp256k1.setCommonCurveParameters(tempPrivateKey);
-        tempPoint = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KeyBuilder.LENGTH_EC_FP_256, false);
-        Secp256k1.setCommonCurveParameters(tempPoint);
-        tempPublicKey = (ECPublicKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, KeyBuilder.LENGTH_EC_FP_256, false);
-        Secp256k1.setCommonCurveParameters(tempPublicKey);
-        // set scalar of the tempPoint to 1
+        if(tempPoint == null) {
+            tempPoint = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KeyBuilder.LENGTH_EC_FP_256, false);
+            Secp256k1.setCommonCurveParameters(tempPoint);
+        }
+        if(tempPublicKey == null) {
+            tempPublicKey = (ECPublicKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PUBLIC, KeyBuilder.LENGTH_EC_FP_256, false);
+            Secp256k1.setCommonCurveParameters(tempPublicKey);
+        }
         short len = LENGTH_PRIVATE_KEY;
         short off = heap.allocate(len);
         byte[] buf = heap.buffer;
@@ -533,6 +561,26 @@ public class Secp256k1 {
     {
         tempPrivateKey.setS(scalar, scalarOff, LENGTH_PRIVATE_KEY);
         return ecdh(tempPrivateKey, point, pointOffset, out, outOffset);
+    }
+    /**
+     * Signs the message with the private key without low-S normalization.
+     * The host should normalize S if required (specter-diy does this).
+     * This avoids pulling in FiniteField for secure channel authentication.
+     * @param privateKey - private key object to sign with
+     * @param msg        - buffer with a 32-byte hash to sign
+     * @param msgOffset  - offset in the msg buffer
+     * @param out        - output buffer to write the signature to
+     * @param outOffset  - offset in the output buffer
+     * @return number of bytes written to the output buffer
+     */
+    static public short signNoLowS(
+                    ECPrivateKey privateKey, 
+                    byte[] msg, short msgOffset,
+                    byte[] out, short outOffset)
+    {
+        sig.init(privateKey, Signature.MODE_SIGN);
+        short len = sig.signPreComputedHash(msg, msgOffset, LENGTH_MESSAGE, out, outOffset);
+        return len;
     }
     /**
      * Signs the message with the private key. The message should be already hashed.

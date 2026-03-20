@@ -105,6 +105,13 @@ public class BlindOracleApplet extends SecureApplet{
         childPrv = JCSystem.makeTransientByteArray(PRVKEY_LEN, JCSystem.CLEAR_ON_DESELECT);
         childXpub = JCSystem.makeTransientByteArray(BIP32_LEN, JCSystem.CLEAR_ON_DESELECT);
     }
+    @Override
+    protected void ensureInitialized(){
+        super.ensureInitialized();
+        Crypto.init(heap);
+        Secp256k1.initPointOps(heap);
+        FiniteField.initScalar(heap);
+    }
     /**
      * Handles secure message (decrypted by SecureChannel)
      * 
@@ -143,6 +150,7 @@ public class BlindOracleApplet extends SecureApplet{
         short len = (short)64;
         short off = heap.allocate(len);
         // do hmac_sha512("Bitcoin seed", seed)
+        Crypto.ensureHmacSha512();
         Crypto.hmacSha512.init(HDKEY_SEED_KEY, (short)0, (short)(HDKEY_SEED_KEY.length));
         Crypto.hmacSha512.doFinal(seed, seedOff, seedLen, heap.buffer, off);
         // copy first 32 bytes to private key
@@ -253,6 +261,7 @@ public class BlindOracleApplet extends SecureApplet{
         short off = heap.allocate(len);
         byte[] buf = heap.buffer;
 
+        Crypto.ensureHmacSha512();
         Crypto.hmacSha512.init(xprv, xprvOff, (short)32);
         // check if hardened
         if((idx[idxOff]&0x80)!=0){

@@ -21,14 +21,28 @@ public class Crypto{
     static public Cipher cipher;
     static private TransientHeap heap;
 
-    static public void init(TransientHeap hp){
+    static public void initEssential(TransientHeap hp){
+        initRandom();
         heap = hp;
+        if(sha256 == null)
+            sha256 = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
+        if(hmacSha256 == null)
+            hmacSha256 = new HMACDigest(sha256, HMACDigest.ALG_SHA_256_BLOCK_SIZE);
+        if(cipher == null)
+            cipher = Cipher.getInstance(Cipher.ALG_AES_CBC_ISO9797_M2,false);
+    }
+    static public void init(TransientHeap hp){
+        initEssential(hp);
+        if(sha512 == null)
+            sha512 = MessageDigest.getInstance(MessageDigest.ALG_SHA_512, false);
+    }
+    static public void initRandom(){
         random = RandomData.getInstance(RandomData.ALG_SECURE_RANDOM);
-        sha256 = MessageDigest.getInstance(MessageDigest.ALG_SHA_256, false);
-        sha512 = MessageDigest.getInstance(MessageDigest.ALG_SHA_512, false);
-        hmacSha256 = new HMACDigest(sha256, HMACDigest.ALG_SHA_256_BLOCK_SIZE);
-        hmacSha512 = new HMACDigest(sha512, HMACDigest.ALG_SHA_512_BLOCK_SIZE);
-        cipher = Cipher.getInstance(Cipher.ALG_AES_CBC_ISO9797_M2,false);
+    }
+    static public void ensureHmacSha512(){
+        if(hmacSha512 == null){
+            hmacSha512 = new HMACDigest(sha512, HMACDigest.ALG_SHA_512_BLOCK_SIZE);
+        }
     }
     /**
      * One-line PBKDF2 algorithm for Bitcoin stuff. Outputs 64 bytes.
@@ -52,6 +66,7 @@ public class Crypto{
         if(iterations <= 0){
             ISOException.throwIt(ISO7816.SW_DATA_INVALID);
         }
+        ensureHmacSha512();
         // put into RAM, it will slightly speed up calculations
         short blockSize = HMACDigest.ALG_SHA_512_BLOCK_SIZE;
         byte ipad = HMACDigest.IPAD;

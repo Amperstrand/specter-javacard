@@ -31,6 +31,7 @@ public class SingleUseKeyApplet extends SecureApplet{
 
     protected KeyPair singleUseKeyPair;
     protected byte[] tempBuf;
+    private boolean keyGenerated = false;
 
     // Create an instance of the Applet subclass using its constructor, 
     // and to register the instance.
@@ -49,12 +50,24 @@ public class SingleUseKeyApplet extends SecureApplet{
         super();
         tempBuf = JCSystem.makeTransientByteArray(Secp256k1.LENGTH_PUBLIC_KEY_UNCOMPRESSED, JCSystem.CLEAR_ON_DESELECT);
         singleUseKeyPair = Secp256k1.newKeyPair();
-        generateRandomKey();
+    }
+    @Override
+    protected void ensureInitialized(){
+        super.ensureInitialized();
+        Secp256k1.initPointOps(heap);
+        FiniteField.initScalar(heap);
+    }
+    private void ensureKeyGenerated(){
+        if(!keyGenerated){
+            generateRandomKey();
+            keyGenerated = true;
+        }
     }
     // ok, if you want to use it without secure communication 
     // - you should be able to, even though it might be an issue with MITM
     // if you don't - comment out this function
     protected short processPlainMessage(byte[] buf, short len){
+        ensureKeyGenerated();
         // ugly copy-paste for now
         switch (buf[ISO7816.OFFSET_INS]){
             case INS_SINGLE_USE_KEY:
@@ -82,6 +95,7 @@ public class SingleUseKeyApplet extends SecureApplet{
         return 0;
     }
     protected short processSecureMessage(byte[] buf, short len){
+        ensureKeyGenerated();
         if(buf[OFFSET_CMD] == CMD_SINGLE_USE_KEY){
             return processSingleUseKeyCommand(buf, len);
         }else{

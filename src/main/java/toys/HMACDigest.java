@@ -31,8 +31,8 @@ public class HMACDigest {
     HMACDigest(MessageDigest digestAlgo, short blocksize) {
         hash = digestAlgo;
         blockSize = blocksize;
-        intBuf = JCSystem.makeTransientByteArray(hash.getLength(), JCSystem.CLEAR_ON_DESELECT);
-        key = JCSystem.makeTransientByteArray(blockSize, JCSystem.CLEAR_ON_DESELECT);
+        intBuf = JCSystem.makeTransientByteArray(hash.getLength(), JCSystem.CLEAR_ON_RESET);
+        key = JCSystem.makeTransientByteArray(blockSize, JCSystem.CLEAR_ON_RESET);
     }
 
     /**

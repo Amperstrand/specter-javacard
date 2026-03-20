@@ -39,6 +39,8 @@ public class SecureChannel{
 
     /** Static key pair generated when class instance is created */
     private KeyPair staticKeyPair;
+    /** Whether the static key pair has been generated */
+    private boolean keyPairGenerated;
     /** Ephemeral private key for channel establishment */
     private ECPrivateKey ephemeralPrivateKey;
 
@@ -70,21 +72,25 @@ public class SecureChannel{
      *  @param hp - TransientHeap instance to use for internal temporary memory allocations. */
     public SecureChannel(TransientHeap hp){
         heap = hp;
-        // generate random secret key for secure communication
         staticKeyPair = Secp256k1.newKeyPair();
-        staticKeyPair.genKeyPair();
-        // generate random session key pair 
+        keyPairGenerated = false;
         ephemeralPrivateKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KeyBuilder.LENGTH_EC_FP_256, false);
         Secp256k1.setCommonCurveParameters(ephemeralPrivateKey);
-        iv = JCSystem.makeTransientByteArray(LENGTH_IV, JCSystem.CLEAR_ON_DESELECT);
+        iv = JCSystem.makeTransientByteArray(LENGTH_IV, JCSystem.CLEAR_ON_RESET);
 
-        cardAESKey = (AESKey)KeyBuilder.buildKey(KeyBuilder.TYPE_AES_TRANSIENT_DESELECT, KeyBuilder.LENGTH_AES_256, false);
-        hostAESKey = (AESKey)KeyBuilder.buildKey(KeyBuilder.TYPE_AES_TRANSIENT_DESELECT, KeyBuilder.LENGTH_AES_256, false);
-        hostMACKey = JCSystem.makeTransientByteArray(LENGTH_MAC_KEY, JCSystem.CLEAR_ON_DESELECT);
-        cardMACKey = JCSystem.makeTransientByteArray(LENGTH_MAC_KEY, JCSystem.CLEAR_ON_DESELECT);
-        // even though the channel is not open yet, we close it
-        // that overwrites all keys with random junk
+        cardAESKey = (AESKey)KeyBuilder.buildKey(KeyBuilder.TYPE_AES_TRANSIENT_RESET, KeyBuilder.LENGTH_AES_256, false);
+        hostAESKey = (AESKey)KeyBuilder.buildKey(KeyBuilder.TYPE_AES_TRANSIENT_RESET, KeyBuilder.LENGTH_AES_256, false);
+        hostMACKey = JCSystem.makeTransientByteArray(LENGTH_MAC_KEY, JCSystem.CLEAR_ON_RESET);
+        cardMACKey = JCSystem.makeTransientByteArray(LENGTH_MAC_KEY, JCSystem.CLEAR_ON_RESET);
         closeChannel();
+    }
+    /** Generates the static key pair on first use.
+     *  Deferred to avoid heavy transient RAM allocation at init time. */
+    private void ensureKeyPair(){
+        if(!keyPairGenerated){
+            staticKeyPair.genKeyPair();
+            keyPairGenerated = true;
+        }
     }
     /** Get static public key of the channel generated in the constructor.
      *  @return static public key as ECPublicKey instance */
@@ -97,6 +103,7 @@ public class SecureChannel{
      *  @param offset - position where to start
      *  @return number of bytes written to the buffer (65) */
     public short serializeStaticPublicKey(byte[] buf, short offset){
+        ensureKeyPair();
         ECPublicKey pub = getStaticPublicKey();
         return pub.getW(buf, offset);
     }
@@ -121,6 +128,7 @@ public class SecureChannel{
     {
         short len = MAX_LENGTH_KEY;
         short off = heap.allocate(len);
+        ensureKeyPair();
         short ecdhLen = Secp256k1.ecdh( (ECPrivateKey)staticKeyPair.getPrivate(), 
                         hostPubkey, hostPubkeyOff, 
                         heap.buffer, off);
@@ -152,6 +160,7 @@ public class SecureChannel{
     public short openChannelES(byte[] hostPubkey, short hostPubkeyOff,
                                byte[] cardNonce,  short cardNonceOff)
     {
+        ensureKeyPair();
         short len = MAX_LENGTH_KEY;
         short off = heap.allocate(len);
         short ecdhLen = Secp256k1.ecdh( (ECPrivateKey)staticKeyPair.getPrivate(), 
@@ -289,7 +298,7 @@ public class SecureChannel{
 
         Crypto.sha256.reset();
         Crypto.sha256.doFinal(data, dataOffset, dataLen, heap.buffer, off);
-        short sigLen = Secp256k1.sign((ECPrivateKey)staticKeyPair.getPrivate(), heap.buffer, off, out, outOffset);
+        short sigLen = Secp256k1.signNoLowS((ECPrivateKey)staticKeyPair.getPrivate(), heap.buffer, off, out, outOffset);
         heap.free(len);
         return sigLen;
     }

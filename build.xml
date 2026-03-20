@@ -50,7 +50,7 @@
            classes="${class.dir}/MemoryCard"
            includes="${deps.secureapplet},DataEntry.java,MemoryCardApplet.java"
         >
-        <applet class="toys.MemoryCardApplet"   aid="B00B5111CB01"/>
+         <applet class="toys.MemoryCardApplet"   aid="B00B5111CB01"/>
       </cap>
     </javacard>
   </target>

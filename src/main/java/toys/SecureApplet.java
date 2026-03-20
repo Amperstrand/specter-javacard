@@ -49,6 +49,12 @@ public class SecureApplet extends Applet{
     /** Class code for secure applet */
     protected static final byte SECURE_CLA                      = (byte)0xB0;
 
+    // Debug build flag — set to true for memory diagnostics, false for production.
+    // JavaCard compilers typically eliminate dead code from constant false branches.
+    private static final boolean DEBUG_BUILD = false;
+    private static final byte DEBUG_CLA   = (byte)0xA0;
+    private static final byte DEBUG_INS_MEM = (byte)0x00;
+
     /** Instruction to get 32 random bytes, without secure channel */
     protected static final byte  INS_GET_RANDOM                 = (byte)0xB1;
 
@@ -125,7 +131,7 @@ public class SecureApplet extends Applet{
     /** offset of the complete decrypted message */
     public  static final short OFFSET_SECURE_MESSAGE    = (short)0;
     /** length of transient heap */
-    public  static final short LENGTH_TRANSIENT_HEAP    = (short)768;
+    public  static final short LENGTH_TRANSIENT_HEAP    = (short)384;
 
     /* PIN constants */
     protected static final byte PIN_MAX_LENGTH            = (byte)32;
@@ -137,6 +143,7 @@ public class SecureApplet extends Applet{
 
     protected TransientHeap heap;
     protected SecureChannel sc;
+    protected boolean initialized = false;
 
     // Create an instance of the Applet subclass using its constructor, 
     // and to register the instance.
@@ -152,16 +159,16 @@ public class SecureApplet extends Applet{
         }
     }
     public SecureApplet(){
-        // maybe should be a parameter in the constructor?
         heap = new TransientHeap(LENGTH_TRANSIENT_HEAP);
-        // Crypto primitives. 
-        // Keep it in this order.
-        FiniteField.init(heap);
-        Secp256k1.init(heap);
-        Crypto.init(heap);
-        sc = new SecureChannel(heap);
-        // maybe also should be a parameter in the constructor?
+        Crypto.initRandom();
         pin = new PinCode(PIN_MAX_COUNTER, PIN_MAX_LENGTH);
+    }
+    protected void ensureInitialized(){
+        if(initialized) return;
+        Crypto.initEssential(heap);
+        Secp256k1.initCore(heap);
+        sc = new SecureChannel(heap);
+        initialized = true;
     }
     /** Redefine this function in your applet to process secure message
      *  return number of bytes written in the buffer
@@ -183,16 +190,23 @@ public class SecureApplet extends Applet{
     // Process the command APDU, 
     // All APDUs are received by the JCRE and preprocessed. 
     public void process(APDU apdu){
-        // Select the Applet, through the select method, this applet is selectable, 
-        // After successful selection, all APDUs are delivered to the currently selected applet
-        // via the process method.
         if (selectingApplet()){
             return;
         }
-        // Receive incoming data
-        // might be limited by the apdu buffer
-        // but should work fine with messages up to 255 bytes
         byte[] buf = apdu.getBuffer();
+        ensureInitialized();
+        if(DEBUG_BUILD && buf[ISO7816.OFFSET_CLA] == DEBUG_CLA
+                       && buf[ISO7816.OFFSET_INS] == DEBUG_INS_MEM){
+            apdu.setIncomingAndReceive();
+            short off = 0;
+            Util.setShort(buf, off, JCSystem.getAvailableMemory(JCSystem.MEMORY_TYPE_PERSISTENT)); off += 2;
+            Util.setShort(buf, off, JCSystem.getAvailableMemory(JCSystem.MEMORY_TYPE_TRANSIENT_RESET)); off += 2;
+            Util.setShort(buf, off, JCSystem.getAvailableMemory(JCSystem.MEMORY_TYPE_TRANSIENT_DESELECT)); off += 2;
+            apdu.setOutgoing();
+            apdu.setOutgoingLength(off);
+            apdu.sendBytesLong(buf, (short)0, off);
+            return;
+        }
         apdu.setIncomingAndReceive();
         short dataLen = Util.makeShort((byte)0, buf[ISO7816.OFFSET_LC]);
         short dataOff = ISO7816.OFFSET_CDATA;

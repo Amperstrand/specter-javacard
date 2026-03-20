@@ -141,7 +141,7 @@ class SecureChannel:
     def request(self, data):
         # if counter reached maximum - reestablish channel
         if self.iv >= 2**16 or not self.is_open:
-            self.establish_secure_channel()
+            self.open()
         ct = self.encrypt(data)
         res = self.card.request(b"\xB0\xB6\x00\x00"+(bytes([len(ct)])+ct))
         plaintext = self.decrypt(res)

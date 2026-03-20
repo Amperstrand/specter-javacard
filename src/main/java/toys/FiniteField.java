@@ -73,6 +73,17 @@ public class FiniteField{
     final static public short OFFSET_FIELD_ELEMENT = (short)(LENGTH_RSA_KEY-LENGTH_FIELD_ELEMENT);
 
     /**
+     * Initializes scalar math capability (Layer B).
+     * Sets the heap reference so add, subtract, addMod, subtractMod,
+     * getRandomElement, and isGreaterOrEqual work.
+     * Does NOT allocate RSA engines (Layer D) — suitable for J3R180.
+     * Idempotent.
+     */
+    static public void initScalar(TransientHeap hp)
+    {
+        heap = hp;
+    }
+    /**
      * Allocates objects needed by this class.
      * <p>
      * Must be invoked during the applet installation exactly 1 time.
@@ -80,7 +91,8 @@ public class FiniteField{
      */
     static public void init(TransientHeap hp)
     {
-        heap = hp;
+        initScalar(hp);
+        if(rsaModN != null) return;
         rsaModN = (RSAPublicKey) KeyBuilder.buildKey(
                 KeyBuilder.TYPE_RSA_PUBLIC, KeyBuilder.LENGTH_RSA_512, false);
         rsaInverseN = (RSAPublicKey) KeyBuilder.buildKey(
