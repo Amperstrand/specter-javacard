@@ -16,13 +16,19 @@ EC_COMPRESSED =   0b0100000010
 EC_UNCOMPRESSED = 0b0000000010
 
 def _init(flags = (CONTEXT_SIGN | CONTEXT_VERIFY)):
-    library_path = ctypes.util.find_library('libsecp256k1')
-    if library_path is None:
-        CURRENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)))
-        if sys.platform == 'darwin':
-            library_path = os.path.abspath(os.path.join(CURRENT_DIR, "prebuilt/libsecp256k1.dylib"))
-        else:
-            library_path = os.path.abspath(os.path.join(CURRENT_DIR, "prebuilt/libsecp256k1.so"))
+    CURRENT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)))
+    # Prefer the bundled prebuilt library because some system versions
+    # don't export every symbol this test harness expects.
+    if sys.platform == 'darwin':
+        library_path = os.path.abspath(os.path.join(CURRENT_DIR, "prebuilt/libsecp256k1.dylib"))
+    else:
+        library_path = os.path.abspath(os.path.join(CURRENT_DIR, "prebuilt/libsecp256k1.so"))
+        # Fallback: if the bundled library isn't present (non-standard setups),
+        # try the system one.
+        if not os.path.exists(library_path):
+            library_path = ctypes.util.find_library('libsecp256k1')
+            if library_path is None:
+                raise RuntimeError("libsecp256k1 not found (bundled or system)")
 
     secp256k1 = ctypes.cdll.LoadLibrary(library_path)
 
