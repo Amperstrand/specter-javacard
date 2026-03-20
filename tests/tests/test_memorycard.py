@@ -171,6 +171,31 @@ class SecureAppletTest(unittest.TestCase):
         self.assertEqual(is_set, 0)
         sc.close()
 
+    def test_storage_put_get(self):
+        sc = self.get_secure_channel()
+
+        # Unlock the card (SET PIN also validates the PIN).
+        pin = b"My PIN code"
+        sc.request(b"\x03\x04" + pin)
+
+        secret = b"this is a test secret"
+        # Store secret
+        stored = sc.request(b"\x05\x01" + secret)
+        self.assertEqual(stored, secret)
+
+        # Read secret
+        got = sc.request(b"\x05\x00")
+        self.assertEqual(got, secret)
+
+        # Lock card and ensure storage commands fail
+        sc.request(b"\x03\x02")
+        with self.assertRaises(SecureError):
+            sc.request(b"\x05\x00")
+        with self.assertRaises(SecureError):
+            sc.request(b"\x05\x01" + b"x")
+
+        sc.close()
+
     def test_invalid(self):
         with self.assertRaises(ISOException) as e:
             # invalid INS
