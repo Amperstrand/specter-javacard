@@ -14,6 +14,13 @@ permissions:
 
 jobs:
   build:
+    strategy:
+      matrix:
+        include:
+          - card: j3h145
+            jckit: sdks/jc304_kit
+          - card: j3r180
+            jckit: sdks/jc305u3_kit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,8 +33,8 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
-      - name: Build all CAP files (first)
-        run: nix develop --command ant -DJCKIT=sdks/jc304_kit all
+      - name: Build all CAP files for ${{ matrix.card }} (first)
+        run: nix develop --command ant -DJCKIT=${{ matrix.jckit }} all
 
       - name: Normalize and snapshot hashes
         run: |
@@ -35,7 +42,7 @@ jobs:
           cat /tmp/hashes-first.txt
 
       - name: Clean and rebuild
-        run: nix develop --command ant clean all -DJCKIT=sdks/jc304_kit
+        run: nix develop --command ant clean all -DJCKIT=${{ matrix.jckit }}
 
       - name: Normalize and verify reproducibility
         run: |
@@ -43,21 +50,23 @@ jobs:
           diff /tmp/hashes-first.txt /tmp/hashes-second.txt
           echo "Reproducibility check passed: both builds produce identical CAP files"
 
+      - name: Rename CAP files with card suffix
+        run: |
+          shopt -s nullglob
+          for f in build/cap/*.cap; do
+            name=$(basename "$f" .cap)
+            mv "$f" "build/cap/${name}-${{ matrix.card }}.cap"
+          done
+
       - name: Attest CAP files
         uses: actions/attest@v4
         with:
-          subject-path: |
-            build/cap/TeapotApplet.cap
-            build/cap/MemoryCardApplet.cap
-            build/cap/SingleUseKeyApplet.cap
-            build/cap/BlindOracleApplet.cap
-            build/cap/SecureApplet.cap
-            build/cap/Bundle.cap
+          subject-path: build/cap/*-${{ matrix.card }}.cap
 
       - name: Upload CAP artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cap-files
+          name: cap-files-${{ matrix.card }}
           path: build/cap/*.cap
           if-no-files-found: error
 
@@ -70,9 +79,16 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download J3H145 CAP artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: cap-files
+          name: cap-files-j3h145
+          path: cap-files/
+
+      - name: Download J3R180 CAP artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cap-files-j3r180
           path: cap-files/
 
       - name: Create GitHub Release
@@ -90,9 +106,16 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/download-artifact@v4
+      - name: Download J3H145 CAP artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: cap-files
+          name: cap-files-j3h145
+          path: cap-files/
+
+      - name: Download J3R180 CAP artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cap-files-j3r180
           path: cap-files/
 
       - name: Delete existing pre-release tag
