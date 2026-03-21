@@ -1,4 +1,4 @@
-.PHONY: install uninstall test benchmark list key-check key-clear build all
+.PHONY: install uninstall test benchmark list key-check key-clear build build-j3h145 build-j3r180 all
 
 GP_HELPER  = python3 gp_helper.py
 APPLET     ?= memorycard
@@ -33,6 +33,12 @@ all: build
 
 build:
 	ant all
+
+build-j3h145:
+	ant all -DJCKIT=sdks/jc304_kit
+
+build-j3r180:
+	ant all -DJCKIT=sdks/jc305u3_kit
 
 build/%:
 	ant $(@F)

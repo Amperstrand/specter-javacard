@@ -18,11 +18,20 @@ Tested on [NXP JCOP3 J3H145](https://www.smartcardfocus.com/shop/ilp/id~879/nxp-
 
 ## Getting CAP files
 
-**Primary: download from CI.** Every push to `master` triggers a build that produces reproducible CAP files (verified by building twice and comparing SHA-256 hashes after timestamp normalization).
+**Primary: download from CI.** Every push to `master` triggers a build that produces reproducible, card-specific CAP files (verified by building twice and comparing SHA-256 hashes after timestamp normalization).
+
+Two artifact sets are produced per build — one compiled for each supported card:
+
+| Artifact | Card | JavaCard SDK |
+|----------|------|-------------|
+| `cap-files-j3h145` | NXP JCOP3 J3H145 | JC304 |
+| `cap-files-j3r180` | NXP JCOP4 J3R180 | JC305 |
 
 1. Go to [Actions](https://github.com/Amperstrand/specter-javacard/actions/workflows/build.yml)
 2. Click the latest green run
-3. Download the `cap-files` artifact
+3. Download the `cap-files-j3h145` or `cap-files-j3r180` artifact for your card
+
+Release assets are named `<Applet>-j3h145.cap` / `<Applet>-j3r180.cap` for easy identification.
 
 ## Flashing to card
 
@@ -62,6 +71,22 @@ ant all
 ```
 
 Build a single applet: `ant MemoryCard`
+
+### Card-specific builds
+
+Use the Makefile targets to compile against each card's native JavaCard SDK:
+
+```sh
+make build-j3h145   # NXP JCOP3 J3H145 — compiled with JC304 SDK
+make build-j3r180   # NXP JCOP4 J3R180 — compiled with JC305 SDK
+```
+
+Or pass the SDK directly to Ant:
+
+```sh
+ant all -DJCKIT=sdks/jc304_kit   # J3H145
+ant all -DJCKIT=sdks/jc305u3_kit  # J3R180
+```
 
 ## Running tests
 
