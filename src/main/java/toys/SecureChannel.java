@@ -41,6 +41,8 @@ public class SecureChannel{
     private KeyPair staticKeyPair;
     /** Whether the static key pair has been generated */
     private boolean keyPairGenerated;
+    /** Whether ephemeral keys and session keys have been allocated */
+    private boolean sessionKeysAllocated;
     /** Ephemeral private key for channel establishment */
     private ECPrivateKey ephemeralPrivateKey;
 
@@ -69,20 +71,29 @@ public class SecureChannel{
     private TransientHeap heap;
 
     /** Constructor for SecureChannel.
+     *  Allocates only the heap reference. All transient objects are deferred
+     *  to ensureSessionKeys() to minimize transient RAM at init time.
      *  @param hp - TransientHeap instance to use for internal temporary memory allocations. */
     public SecureChannel(TransientHeap hp){
         heap = hp;
         staticKeyPair = Secp256k1.newKeyPair();
         keyPairGenerated = false;
+        sessionKeysAllocated = false;
+    }
+    /** Allocates ephemeral private key, IV, and session keys on first channel open.
+     *  Deferred to reduce transient RAM pressure on cards with limited RAM
+     *  (e.g. JCOP4 J3H145 with ~1500B CLEAR_ON_DESELECT).
+     *  Idempotent — safe to call multiple times. */
+    private void ensureSessionKeys(){
+        if(sessionKeysAllocated) return;
         ephemeralPrivateKey = (ECPrivateKey)KeyBuilder.buildKey(KeyBuilder.TYPE_EC_FP_PRIVATE, KeyBuilder.LENGTH_EC_FP_256, false);
         Secp256k1.setCommonCurveParameters(ephemeralPrivateKey);
         iv = JCSystem.makeTransientByteArray(LENGTH_IV, JCSystem.CLEAR_ON_RESET);
-
         cardAESKey = (AESKey)KeyBuilder.buildKey(KeyBuilder.TYPE_AES_TRANSIENT_RESET, KeyBuilder.LENGTH_AES_256, false);
         hostAESKey = (AESKey)KeyBuilder.buildKey(KeyBuilder.TYPE_AES_TRANSIENT_RESET, KeyBuilder.LENGTH_AES_256, false);
         hostMACKey = JCSystem.makeTransientByteArray(LENGTH_MAC_KEY, JCSystem.CLEAR_ON_RESET);
         cardMACKey = JCSystem.makeTransientByteArray(LENGTH_MAC_KEY, JCSystem.CLEAR_ON_RESET);
-        closeChannel();
+        sessionKeysAllocated = true;
     }
     /** Generates the static key pair on first use.
      *  Deferred to avoid heavy transient RAM allocation at init time. */
@@ -126,9 +137,10 @@ public class SecureChannel{
                                byte[] hostNonce,  short hostNonceOff,
                                byte[] cardNonce,  short cardNonceOff)
     {
+        ensureKeyPair();
+        ensureSessionKeys();
         short len = MAX_LENGTH_KEY;
         short off = heap.allocate(len);
-        ensureKeyPair();
         short ecdhLen = Secp256k1.ecdh( (ECPrivateKey)staticKeyPair.getPrivate(), 
                         hostPubkey, hostPubkeyOff, 
                         heap.buffer, off);
@@ -161,6 +173,7 @@ public class SecureChannel{
                                byte[] cardNonce,  short cardNonceOff)
     {
         ensureKeyPair();
+        ensureSessionKeys();
         short len = MAX_LENGTH_KEY;
         short off = heap.allocate(len);
         short ecdhLen = Secp256k1.ecdh( (ECPrivateKey)staticKeyPair.getPrivate(), 
@@ -193,6 +206,7 @@ public class SecureChannel{
                     byte[] hostPubkey, short hostPubkeyOff,
                     byte[] cardPubkey, short cardPubkeyOff)
     {
+        ensureSessionKeys();
         short len = MAX_LENGTH_KEY;
         short off = heap.allocate(len);
         Secp256k1.generateRandomSecret(heap.buffer, off);
@@ -396,6 +410,7 @@ public class SecureChannel{
      * Overwrites all secret keys with random data.
      */
     public void closeChannel(){
+        if(!sessionKeysAllocated) return;
         // fill with random data to make sure that
         // nobody can talk to the card anymore
         Crypto.random.generateData(iv, (short)0, (short)iv.length);
