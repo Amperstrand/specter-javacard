@@ -4,7 +4,7 @@ JavaCard applets for [Specter-DIY](https://github.com/cryptoadvance/specter-diy)
 
 Documentation for classes and applets is in the [`docs/`](./docs) folder.
 
-Tested on [NXP JCOP3 J3H145](https://www.smartcardfocus.com/shop/ilp/id~879/nxp-j3h145-dual-interface-java-card-144k/p/index.shtml) and [NXP JCOP4 J3R180](https://www.nxp.com/products/security-and-identification/smart-card-ics/secure-element-ics/JCOP4/JCOP4-J3R180-SECID:PJ3R180_V3).
+Tested on [NXP JCOP4 J3R180](https://www.nxp.com/products/security-and-identification/smart-card-ics/secure-element-ics/JCOP4/JCOP4-J3R180-SECID:PJ3R180_V3) — all 4 applets, 38/38 card tests (2026-03-20, issue [#1](https://github.com/Amperstrand/specter-javacard/issues/1); operations guide: [`docs/J3R180.md`](./docs/J3R180.md)). The [NXP JCOP3 J3H145](https://www.smartcardfocus.com/shop/ilp/id~879/nxp-j3h145-dual-interface-java-card-144k/p/index.shtml) worked historically, but the current SecureApplet-based applets hit install-time transient-RAM exhaustion there — tracked in issue [#3](https://github.com/Amperstrand/specter-javacard/issues/3), fix pending in PR [#4](https://github.com/Amperstrand/specter-javacard/pull/4).
 
 ## Applets
 
@@ -58,8 +58,13 @@ ant all        # produces CAP files in build/cap/
 ```sh
 git submodule update --init --recursive
 # Install JDK 8 and ant for your platform, then:
-ant all
+LANG=C.UTF-8 ant all
 ```
+
+Note: build with a UTF-8 locale (`LANG=C.UTF-8`). The sources contain
+non-ASCII comments; on a POSIX/ASCII locale `ant` fails with "unmappable
+character for encoding ASCII". CI runners are UTF-8 by default, so this only
+bites local builds.
 
 Build a single applet: `ant MemoryCard`
 
@@ -150,6 +155,14 @@ The J3R180 has limited transient RAM (~1500B available). The init system uses a 
 | MemoryCardApplet | A | Yes | Yes |
 | SingleUseKeyApplet | A+B+C | Yes | Yes |
 | BlindOracleApplet | A+B+C+SHA-512 | Yes | Yes |
+
+> **J3H145 caveat (2026-03-24):** with SCP02 present, SecureApplet-based
+> applets exhaust transient RAM at INSTALL time on J3H145 — see issue
+> [#3](https://github.com/Amperstrand/specter-javacard/issues/3) and PR
+> [#4](https://github.com/Amperstrand/specter-javacard/pull/4) (defers ~96 B of
+> SecureChannel session-key allocations to first `openChannel*()`). The layer
+> table above describes runtime behavior once installed. Install/ops guide for
+> J3R180: [`docs/J3R180.md`](./docs/J3R180.md).
 
 ### Key design decisions
 - Secure channel signatures use `signNoLowS()` (no FiniteField). Host normalizes S.
