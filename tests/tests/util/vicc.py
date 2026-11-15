@@ -186,6 +186,15 @@ class VpcdSession:
                 chunk = sock.recv(4096)
             except socket.timeout:
                 continue  # idle != dead (transmit-dead-window mitigation)
+            except OSError as e:
+                # RST/EBADF & friends = session over (a pcscd restart with
+                # unread data in the kernel buffer RSTs instead of FINning;
+                # without this the reader thread dies, `dead` is never set
+                # and the worker loops forever as a zombie — bench-proven
+                # 2026-11-15 when two adapters failed to re-attach)
+                log("vpcd session reset (%s)" % e)
+                self.dead.set()
+                return
             if not chunk:
                 log("vpcd driver closed the session")
                 self.dead.set()
