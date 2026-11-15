@@ -1,0 +1,238 @@
+# SatoChip card protocol contract — the machine-readable spec (2026-11-15).
+#
+# Provenance: INS/SW/CLA values and handler names are validated against the
+# pinned Toporin SatochipApplet tags by tests/host/extract_apdu_spec.py
+# (spec-vs-tag CI check). Semantic fields (p1/p2/data layouts, deltas) are
+# hand-curated from source reading + hardware proof: pysaudit conformance
+# audit (2026-11-04), the real-card battery (25/25, 2026-11-15), and the
+# vpcd version-farm batteries (v0.14-0.2 + v0.16-0.1 both 25/25).
+#
+# Wire facts are not copyrightable; this file is original expression in an
+# MIT repository. The GPL applet source is never copied in.
+#
+# Golden vectors live in vectors/ (recorded from the deterministic-seed
+# vpcd farm members). farm_reader values refer to ../build_satochip_farm.sh.
+
+meta:
+  upstream: Toporin/SatochipApplet
+  aid: 5361746f43686970        # ASCII "SatoChip"
+  select_apdu: "00A40400{aid_len}{aid}"
+
+channel:  # identical across v0.14-0.2 and v0.16-0.1 (source-verified both tags)
+  cla: 0xB0
+  init_ins: 0x81               # INS_INIT_SECURE_CHANNEL (plaintext-allowed)
+  process_ins: 0x82            # INS_PROCESS_SECURE_CHANNEL (encrypted transport)
+  ecdh: host ephemeral x card ephemeral, secp256k1, shared = x-coordinate (32B)
+  kdf:
+    session_key: "HMAC-SHA160(shared_x, 'sc_key')[0:16]"
+    mac_key: "HMAC-SHA160(shared_x, 'sc_mac')[0:20]"
+  init_request: "[cla 0x81 00 00 41 | host_ephemeral_pubkey(65, uncompressed)]"
+  init_response: "[coordx_size(2)=0x0020 | card_ephemeral_coordx(32) | sig_size(2) | self-sig(DER) | sig_size(2)? | authentikey-sig(2)?]"
+  card_pubkey_recovery: "recover from self-sig over sha256(0x0020 || coordx); try recovery ids, keep matching x"
+  iv: "12 random bytes + u32-BE counter; last byte forced ODD; counter += 2 per request"
+  request_frame: "[iv(16) | ct_len(2) | ct | 0x0014 | HMAC-SHA160(mac_key, iv|len|ct)]"
+  response_frame: "[iv(16) | ct_len(2) | ct]"
+  padding: PKCS7-16
+  plaintext_allowed_ins: [0xA4, 0x3C, 0x81]
+
+versions:
+  v0.14-0.2:
+    tag: v0.14-0.2
+    applet_class: org.satochip.applet.CardEdge
+    source_prefix: src/org/satochip/applet
+    get_status_len: 12
+    farm_reader: "jCardSim VPCD 00 01"
+    setup:
+      transport: secure_channel
+      data: "[len|'Muscle00' (install-time PIN, CHECKED)] + [pin0_tries|ublk0_tries|len|pin0|len|puk0] + [pin1_tries|ublk1_tries|len|pin1|len|puk1] + [secmem_size(2BE)|rfu(2)|rfu(1)x3] (+ option_flags(2))"
+    notes: "9C01 (key cache full) => retry same INS with P2|0x80 (0x80 = cache RESET, key still cached; pysatochip CardConnector:1272-1280). High-S signatures NOT normalized (normalize at consumer)."
+    ins:
+      SETUP:                  {code: 0x2A, handler: setup}
+      IMPORT_KEY:             {code: 0x32, handler: ImportKey}
+      RESET_KEY:              {code: 0x33, handler: ResetKey}
+      GET_PUBLIC_FROM_PRIVATE: {code: 0x35, handler: getPublicKeyFromPrivate}
+      CREATE_PIN:             {code: 0x40, handler: CreatePIN}
+      VERIFY_PIN:             {code: 0x42, handler: VerifyPIN, data: "[Lc | pin]", transport: secure_channel}
+      CHANGE_PIN:             {code: 0x44, handler: ChangePIN, data: "[len|old|len|new]", transport: secure_channel}
+      UNBLOCK_PIN:            {code: 0x46, handler: UnblockPIN}
+      LIST_PINS:              {code: 0x48, handler: ListPINs}
+      LOGOUT_ALL:             {code: 0x60, handler: LogOutAll}
+      GET_STATUS:             {code: 0x3C, handler: GetStatus, transport: plaintext, response: "[proto_major|proto_minor|applet_major|applet_minor|PIN0_tries|PUK0_tries|PIN1_tries|PUK1_tries|needs2FA|is_seeded|setup_done|needs_secure_channel]"}
+      CARD_LABEL:             {code: 0x3D, handler: cardLabel}
+      BIP32_IMPORT_SEED:      {code: 0x6C, handler: importBIP32Seed, p1: "seed size (<=64)", p2: "0x00", data: "[seed]", requires: "PIN0 validated in session", transport: secure_channel}
+      BIP32_RESET_SEED:       {code: 0x77, handler: resetBIP32Seed}
+      BIP32_GET_AUTHENTIKEY:  {code: 0x73, handler: getBIP32AuthentiKey}
+      BIP32_SET_AUTHENTIKEY_PUBKEY: {code: 0x75, handler: setBIP32AuthentikeyPubkey}
+      BIP32_GET_EXTENDED_KEY: {code: 0x6D, handler: getBIP32ExtendedKey, p1: "depth", p2: "0x00 full-derivation | 0x40 watch-only | |0x80 no-cache bit", data: "[path: 4B-BE per level]", response: "[chaincode(32) | coordx_size(2) | coordx(32) | sig_size(2) | self-sig | sig_size(2) | authentikey-sig] — self-sig covers sha256(chaincode || 0x0020 || coordx) (66B, NOT the 0x81-style 34; source-read 2026-11-15, the framing every earlier client missed)", transport: secure_channel}
+      BIP32_SET_EXTENDED_PUBKEY: {code: 0x74, handler: setBIP32ExtendedPubkey}
+      SIGN_MESSAGE:           {code: 0x6E, handler: signMessage, note: "removed in v0.16"}
+      SIGN_SHORT_MESSAGE:     {code: 0x72, handler: signShortMessage}
+      SIGN_TRANSACTION:       {code: 0x6F, handler: SignTransaction, note: "removed in v0.16"}
+      PARSE_TRANSACTION:      {code: 0x71, handler: ParseTransaction}
+      CRYPT_TRANSACTION_2FA:  {code: 0x76, handler: CryptTransaction2FA}
+      SET_2FA_KEY:            {code: 0x79, handler: set2FAKey}
+      RESET_2FA_KEY:          {code: 0x78, handler: reset2FAKey}
+      SIGN_TRANSACTION_HASH:  {code: 0x7A, handler: SignTransactionHash, p1: "keynbr (0xFF = last derived BIP32 key)", p2: "0x00", data: "[32B digest]", response: "[DER sig]", transport: secure_channel}
+      TAPROOT_TWEAK_PRIVKEY:  {code: 0x7C, handler: TaprootTweakPrivateKey}
+      SIGN_SCHNORR_HASH:      {code: 0x7B, handler: SignSchnorrHash}
+      INIT_SECURE_CHANNEL:    {code: 0x81, handler: InitiateSecureChannel, transport: plaintext}
+      PROCESS_SECURE_CHANNEL: {code: 0x82, handler: ProcessSecureChannel, transport: plaintext-encrypted}
+      IMPORT_ENCRYPTED_SECRET: {code: 0xAC, handler: importEncryptedSecret}
+      IMPORT_TRUSTED_PUBKEY:  {code: 0xAA, handler: importTrustedPubkey}
+      EXPORT_TRUSTED_PUBKEY:  {code: 0xAB, handler: exportTrustedPubkey}
+      EXPORT_AUTHENTIKEY:     {code: 0xAD, handler: getAuthentikey}
+      IMPORT_PKI_CERTIFICATE: {code: 0x92, handler: import_PKI_certificate}
+      EXPORT_PKI_CERTIFICATE: {code: 0x93, handler: export_PKI_certificate}
+      SIGN_PKI_CSR:           {code: 0x94, handler: sign_PKI_CSR}
+      EXPORT_PKI_PUBKEY:      {code: 0x98, handler: export_PKI_pubkey}
+      LOCK_PKI:               {code: 0x99, handler: lock_PKI}
+      CHALLENGE_RESPONSE_PKI: {code: 0x9A, handler: challenge_response_pki}
+      RESET_TO_FACTORY:       {code: 0xFF, note: "card insertion-count trigger (MAX_RESET_COUNTER inserts), NOT a usable APDU command"}
+    sw:
+      PIN_FAILED: 0x63C0
+      NO_MEMORY_LEFT: 0x9C01       # literal lives in Bip32ObjectManager.java (cross-file reference in CardEdge.java)
+      OPERATION_NOT_ALLOWED: 0x9C03
+      SETUP_NOT_DONE: 0x9C04
+      UNSUPPORTED_FEATURE: 0x9C05
+      UNAUTHORIZED: 0x9C06
+      SETUP_ALREADY_DONE: 0x9C07
+      INCORRECT_ALG: 0x9C09
+      SIGNATURE_INVALID: 0x9C0B
+      IDENTITY_BLOCKED: 0x9C0C
+      BIP32_DERIVATION_ERROR: 0x9C0E
+      INVALID_PARAMETER: 0x9C0F
+      INCORRECT_P1: 0x9C10
+      INCORRECT_P2: 0x9C11
+      INCORRECT_INITIALIZATION: 0x9C13
+      INCORRECT_TXHASH: 0x9C15
+      BIP32_UNINITIALIZED_SEED: 0x9C14
+      BIP32_INITIALIZED_SEED: 0x9C17
+      2FA_INITIALIZED_KEY: 0x9C18
+      2FA_UNINITIALIZED_KEY: 0x9C19
+      ECKEYS_INITIALIZED_KEY: 0x9C1A
+      SECURE_CHANNEL_REQUIRED: 0x9C20
+      SECURE_CHANNEL_UNINITIALIZED: 0x9C21
+      SECURE_CHANNEL_WRONG_IV: 0x9C22
+      SECURE_CHANNEL_WRONG_MAC: 0x9C23
+      SECURE_IMPORT_WRONG_MAC: 0x9C33
+      SECURE_IMPORT_WRONG_FINGERPRINT: 0x9C34
+      SECURE_IMPORT_NO_TRUSTEDPUBKEY: 0x9C35
+      INS_DEPRECATED: 0x9C26
+      IMPORTED_DATA_TOO_LONG: 0x9C32
+      PKI_ALREADY_LOCKED: 0x9C40
+      TAPROOT_TWEAK_ERROR: 0x9C43
+      HMAC_UNSUPPORTED_KEYSIZE: 0x9C1E
+      HMAC_UNSUPPORTED_MSGSIZE: 0x9C1F
+      RESET_TO_FACTORY: 0xFF00
+      DEBUG_FLAG: 0x9FFF
+      INTERNAL_ERROR: 0x9CFF
+
+  v0.16-0.1:
+    tag: v0.16-0.1
+    applet_class: org.satochip.applet.Satochip
+    source_prefix: src/main/java/org/satochip/applet
+    get_status_len: 16
+    farm_reader: "jCardSim VPCD v016 00 00"
+    setup:
+      transport: secure_channel
+      data: "same payload shape as v0.14 works: first LV field ('Muscle00') SKIPPED unchecked, PIN slot 0 parsed, slot 1 + secmem tail IGNORED (single-slot parser)"
+    notes: "0x6F/0x6E constants remain but answer SW_INS_DEPRECATED (9C26) at runtime. VERIFY_PIN P1=0x00 only. UnblockPIN new length-prefixed format. factory_reset 0xFD single-APDU (AA/55). GET_STATUS adds feature-policy bytes 12-15. PIN1/PUK1 report 0 tries (single slot). Channel handlers moved to SecureChannel.java (initiate/unwrap)."
+    ins:
+      SETUP:                  {code: 0x2A, handler: setup}
+      IMPORT_KEY:             {code: 0x32, handler: ImportKey}
+      RESET_KEY:              {code: 0x33, handler: ResetKey}
+      GET_PUBLIC_FROM_PRIVATE: {code: 0x35, handler: getPublicKeyFromPrivate}
+      GET_RANDOM:             {code: 0x30, handler: getRandom}
+      SET_FEATURE_POLICY:     {code: 0x3A, handler: setFeaturePolicy}
+      GET_STATUS:             {code: 0x3C, handler: GetStatus, transport: plaintext, response: "12B as v0.14 + feature-policy bytes 12-15"}
+      CARD_LABEL:             {code: 0x3D, handler: cardLabel}
+      SET_NFC_POLICY:         {code: 0x3E, handler: setNfcPolicy}
+      SET_NDEF:               {code: 0x3F}
+      CREATE_PIN:             {code: 0x40, note: "deprecated at dispatch — answers 9C26"}
+      VERIFY_PIN:             {code: 0x42, handler: VerifyPIN, p1: "0x00 ONLY", data: "[Lc | pin]", transport: secure_channel}
+      CHANGE_PIN:             {code: 0x44, handler: ChangePIN}
+      UNBLOCK_PIN:            {code: 0x46, handler: UnblockPIN, note: "NEW length-prefixed format; legacy REJECTED"}
+      LIST_PINS:              {code: 0x48, note: "deprecated at dispatch — answers 9C26"}
+      LOGOUT_ALL:             {code: 0x60, handler: LogOutAll}
+      BIP32_IMPORT_SEED:      {code: 0x6C, handler: importBIP32Seed, transport: secure_channel}
+      BIP32_RESET_SEED:       {code: 0x77, handler: resetBIP32Seed}
+      BIP32_GET_AUTHENTIKEY:  {code: 0x73, handler: getAuthentikey}
+      BIP32_SET_AUTHENTIKEY_PUBKEY: {code: 0x75, note: "deprecated at dispatch — answers 9C26"}
+      BIP32_GET_EXTENDED_KEY: {code: 0x6D, handler: getBIP32ExtendedKey, transport: secure_channel}
+      BIP32_SET_EXTENDED_PUBKEY: {code: 0x74, note: "deprecated at dispatch — answers 9C26"}
+      BIP32_GET_LIQUID_MASTER_BLINDING_KEY: {code: 0x7D, handler: getBIP32LiquidMasterBlindingKey}
+      SIGN_MESSAGE:           {code: 0x6E, note: "constant present; runtime answers 9C26"}
+      SIGN_SHORT_MESSAGE:     {code: 0x72, note: "deprecated at dispatch — answers 9C26"}
+      SIGN_TRANSACTION:       {code: 0x6F, note: "constant present; runtime answers 9C26"}
+      PARSE_TRANSACTION:      {code: 0x71, note: "deprecated at dispatch — answers 9C26"}
+      CRYPT_TRANSACTION_2FA:  {code: 0x76, handler: CryptTransaction2FA}
+      RESET_2FA_KEY:          {code: 0x78, handler: reset2FAKey}
+      SET_2FA_KEY:            {code: 0x79, handler: set2FAKey}
+      SIGN_TRANSACTION_HASH:  {code: 0x7A, handler: SignTransactionHash, p1: "keynbr (0xFF = last derived)", p2: "0x00", data: "[32B digest]", transport: secure_channel}
+      SIGN_SCHNORR_HASH:      {code: 0x7B, handler: SignSchnorrHash}
+      TAPROOT_TWEAK_PRIVKEY:  {code: 0x7C, handler: TaprootTweakPrivateKey}
+      MUSIG2_GENERATE_NONCE:  {code: 0x7E, handler: Musig2GenerateNonce}
+      MUSIG2_SIGN_HASH:       {code: 0x7F, handler: Musig2SignHash}
+      INIT_SECURE_CHANNEL:    {code: 0x81, handler: initiate, transport: plaintext, note: "handler in SecureChannel.java"}
+      PROCESS_SECURE_CHANNEL: {code: 0x82, handler: unwrap, transport: plaintext-encrypted, note: "handler in SecureChannel.java"}
+      IMPORT_ENCRYPTED_SECRET: {code: 0xAC, handler: importEncryptedSecret}
+      IMPORT_TRUSTED_PUBKEY:  {code: 0xAA, handler: importTrustedPubkey}
+      EXPORT_TRUSTED_PUBKEY:  {code: 0xAB, handler: exportTrustedPubkey}
+      EXPORT_AUTHENTIKEY:     {code: 0xAD, handler: getAuthentikey}
+      IMPORT_PKI_CERTIFICATE: {code: 0x92, handler: import_PKI_certificate}
+      EXPORT_PKI_CERTIFICATE: {code: 0x93, handler: export_PKI_certificate}
+      SIGN_PKI_CSR:           {code: 0x94, handler: sign_PKI_CSR}
+      EXPORT_PKI_PUBKEY:      {code: 0x98, handler: export_PKI_pubkey}
+      LOCK_PKI:               {code: 0x99, handler: lock_PKI}
+      CHALLENGE_RESPONSE_PKI: {code: 0x9A, handler: challenge_response_pki}
+      RESET_TO_FACTORY_V3:    {code: 0xFD, handler: resetToFactory, p1: 0xAA, p2: 0x55, transport: secure_channel}
+    sw:
+      PIN_FAILED: 0x63C0
+      NO_MEMORY_LEFT: {code: 0x9C01, source: observed}   # literal commented out in Satochip.java; SW still produced by object manager
+      OPERATION_NOT_ALLOWED: 0x9C03
+      SETUP_NOT_DONE: 0x9C04
+      UNSUPPORTED_FEATURE: 0x9C05
+      UNAUTHORIZED: 0x9C06
+      SETUP_ALREADY_DONE: 0x9C07
+      INCORRECT_ALG: 0x9C09
+      SIGNATURE_INVALID: 0x9C0B
+      IDENTITY_BLOCKED: 0x9C0C
+      BIP32_DERIVATION_ERROR: 0x9C0E
+      INVALID_PARAMETER: 0x9C0F
+      INCORRECT_P1: 0x9C10
+      INCORRECT_P2: 0x9C11
+      INCORRECT_INITIALIZATION: 0x9C13
+      BIP32_UNINITIALIZED_SEED: 0x9C14
+      BIP32_INITIALIZED_SEED: 0x9C17
+      2FA_INITIALIZED_KEY: 0x9C18
+      2FA_UNINITIALIZED_KEY: 0x9C19
+      ECKEYS_INITIALIZED_KEY: 0x9C1A
+      HMAC_UNSUPPORTED_KEYSIZE: 0x9C1E
+      HMAC_UNSUPPORTED_MSGSIZE: 0x9C1F
+      SECURE_CHANNEL_REQUIRED: 0x9C20
+      SECURE_CHANNEL_UNINITIALIZED: 0x9C21   # literal in SecureChannel.java
+      SECURE_CHANNEL_WRONG_IV: 0x9C22        # literal in SecureChannel.java
+      SECURE_CHANNEL_WRONG_MAC: 0x9C23       # literal in SecureChannel.java
+      IMPORTED_DATA_TOO_LONG: 0x9C32
+      SECURE_IMPORT_WRONG_MAC: 0x9C33
+      SECURE_IMPORT_WRONG_FINGERPRINT: 0x9C34
+      SECURE_IMPORT_NO_TRUSTEDPUBKEY: 0x9C35
+      PKI_ALREADY_LOCKED: 0x9C40
+      TAPROOT_TWEAK_ERROR: 0x9C43
+      BIP327_WRONG_SECNONCE: 0x9C44
+      BIP327_PUBKEY_MISMATCH: 0x9C45
+      BIP327_COUNTER_OVERFLOW: 0x9C46
+      BIP327_INVALID_ID: 0x9C47
+      NFC_DISABLED: 0x9C48
+      NFC_BLOCKED: 0x9C49
+      FEATURE_DISABLED: 0x9C4A
+      FEATURE_BLOCKED: 0x9C4B
+      SCHNORR_INVALID_NONCE: 0x9C4C
+      RESET_TO_FACTORY: 0xFF00
+      INS_DEPRECATED: 0x9C26          # v0.16-only SW: deprecated INS answers (0x6E/0x6F/0x40/0x48/0x71/0x74/0x75/0x72)
+      INTERNAL_ERROR: 0x9CFF
+
+# Common proven flows (conformance scripts drive exactly these):
+flows:
+  battery: "select -> get_status(version) -> init_sc -> verify_pin -> [get_extended_key(m/84h/0h/0h/0/i, P2=0x00) -> sign_transaction_hash(0xFF, sha256(msg)) -> host-verify via recovered pubkey] xN"
+  personalize: "select -> get_status -> init_sc -> SETUP -> verify_pin -> BIP32_IMPORT_SEED(32B zero-value test seed) -> get_status(seeded)"

@@ -1,0 +1,13 @@
+farm_reader: jCardSim VPCD 00 01
+get_status_hex: 000e00020303030300010101
+paths:
+  m/84h/0h/0h/0/0:
+    chaincode: 9a632f0dd138f19b03dadf19ef491065b73c9edb3fc4d57df8c18f49e6b0d656
+    coordx: f118af5787517623261d7d90c396270b038c4e02ce3d39726d16eff9a4df8a86
+  m/84h/0h/0h/0/1:
+    chaincode: 9fefcfe890dbc16cdc1c1d0beff4568ab26ee0d75dcf3315664ab4ae4bb4117d
+    coordx: 2c50ecbceafd2ee8ca2224f9c768457456404ffd135e11193a49740e0e898570
+  m/84h/0h/0h/0/2:
+    chaincode: 139a5fde99fcda90a4cf65be7da38d4a0ef26c421b3a53f518e57d9143d125e7
+    coordx: 7e053f23e34db8be94634fb510aff496be96daee3e8933bfaf2b4a253060e824
+tag: v0.14-0.2
