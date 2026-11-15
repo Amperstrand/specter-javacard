@@ -1,0 +1,7 @@
+[Unit]
+Description=Satochip contract sync nightly (spec-vs-tag + vectors + rust conformance)
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/src/specter-javacard/tests/host/satochip-nightly.sh
+Environment=SPECTER_M2_DIR=/home/ubuntu/src/specter-diy-m2
