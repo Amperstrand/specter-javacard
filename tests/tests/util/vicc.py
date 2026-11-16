@@ -166,9 +166,11 @@ class VpcdSession:
     association-safe.
     """
 
-    def __init__(self, sock, sim):
+    def __init__(self, sock, sim, ordered_controls=False, apdu_delay_ms=0):
         self.sock = sock
         self.sim = sim
+        self.ordered_controls = ordered_controls
+        self.apdu_delay_ms = apdu_delay_ms
         self.send_lock = threading.Lock()
         self.apdus = _queue.Queue()
         self.dead = threading.Event()
@@ -206,8 +208,17 @@ class VpcdSession:
                     break
                 msg, buf = buf[2:2 + n], buf[2 + n:]
                 if len(msg) == 1:
-                    if msg[0] == VICC_ATR:
+                    if msg[0] == VICC_ATR and not self.ordered_controls:
                         self.send(self.sim.atr_bytes)  # instant, no JVM hop
+                    elif msg[0] == VICC_ATR:
+                        # ordered mode: the ATR answer queues behind any
+                        # in-flight JVM APDU reply — request-order replies
+                        # (v1 semantics). Reproduces the driver-side
+                        # thread-steal race window deterministically:
+                        # both answers land together, and the unlocked
+                        # driver's presence thread can read the R-APDU
+                        # the transmit thread was waiting for.
+                        self.apdus.put(("control", VICC_ATR))
                     # OFF/ON/RESET: true silence (see module docstring)
                     continue
                 self.apdus.put(msg)
@@ -218,6 +229,14 @@ class VpcdSession:
                 msg = self.apdus.get(timeout=0.5)
             except _queue.Empty:
                 continue
+            if isinstance(msg, tuple) and msg[0] == "control":
+                try:
+                    self.send(self.sim.atr_bytes)
+                except OSError:
+                    self.dead.set()
+                continue
+            if self.apdu_delay_ms > 0:
+                time.sleep(self.apdu_delay_ms / 1000.0)
             try:
                 self.send(self.sim.apdu(msg))
             except (ConnectionError, OSError) as e:
@@ -245,6 +264,10 @@ def main(argv=None):
     ap.add_argument("--classdir", default="Secure",
                     help="dir under build/classes carrying the applet")
     ap.add_argument("--atr", default=DEFAULT_ATR_HEX)
+    ap.add_argument("--ordered-controls", action="store_true",
+                    help="answer ATR controls in request order (v1 semantics) — reproduces the unlocked-driver race")
+    ap.add_argument("--apdu-delay-ms", type=int, default=0,
+                    help="delay APDU replies by N ms (widens the driver-side race window for lock testing)")
     args = ap.parse_args(argv)
 
     sim = JCardSim(args.aid, args.applet, args.classdir, args.sim_port,
@@ -271,7 +294,9 @@ def main(argv=None):
         session = None
         try:
             log("attached to vpcd slot")
-            session = VpcdSession(sock, sim)
+            session = VpcdSession(sock, sim,
+                               ordered_controls=args.ordered_controls,
+                               apdu_delay_ms=args.apdu_delay_ms)
             reader = threading.Thread(target=session.reader_loop,
                                       daemon=True)
             reader.start()
