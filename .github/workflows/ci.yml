@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main, satochip-contract, docs-j3r180]
+  pull_request:
+
+jobs:
+  spec-vs-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Validate spec against pinned Toporin tags
+        working-directory: tests/host
+        run: |
+          python3 extract_apdu_spec.py
+          echo "Spec validated against v0.14-0.2 and v0.16-0.1"
+
+  rust-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/host/satochip-client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: cargo build --verbose
+      - name: Run tests
+        run: cargo test --verbose
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+  rust-spec-regen:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/host
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Regenerate protocol.rs and diff
+        run: |
+          cp satochip-client/src/protocol.rs /tmp/protocol.rs.bak
+          python3 extract_apdu_spec.py --emit-rust satochip-client/src/protocol.rs
+          diff /tmp/protocol.rs.bak satochip-client/src/protocol.rs || {
+            echo "::error::protocol.rs is stale — regenerate with:"
+            echo "  cd tests/host && python3 extract_apdu_spec.py --emit-rust satochip-client/src/protocol.rs"
+            exit 1
+          }
+          echo "protocol.rs is in sync with the spec"

@@ -131,10 +131,33 @@ phase_rust() {
         || note_fail "rust conformance v0.16 member"
 }
 
+phase_real_card() {
+    # Real CardMan card — conservative: status + SC + PIN + 5 sign rounds.
+    # Cardbench owns the seat; at 04:30 nobody else should be driving it.
+    # Absent card = report (not fail); wrong PIN = FAIL (stop immediately).
+    echo "-- real card (CardMan)"
+    local out
+    out=$(cd "$M2_DIR" && timeout 180 python3 cardman-battery.py 5 2>&1)
+    local rc=$?
+    if [ $rc -eq 0 ] && echo "$out" | grep -q "BATTERY: 5 verified / 0 failed"; then
+        echo "real card: 5/5 sign+verify green"
+    elif echo "$out" | grep -q "PIN ERROR"; then
+        note_fail "real card PIN error — CARD STATE CHECK NEEDED"
+        echo "$out" | grep -A2 "PIN ERROR"
+    elif echo "$out" | grep -q "reader matching.*not found"; then
+        echo "real card: CardMan reader absent (skip)"
+    else
+        echo "real card: battery failed (rc=$rc)"
+        echo "$out" | tail -5
+        note_fail "real card battery failure"
+    fi
+}
+
 ensure_farm
 phase_spec
 phase_vectors
 phase_rust
+phase_real_card
 
 ln -sfn "$REPORT" "$OUT_DIR/latest.txt"
 if [ "$FAIL" -eq 0 ]; then

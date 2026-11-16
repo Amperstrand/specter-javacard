@@ -6,3 +6,6 @@ __pycache__
 artifacts/logs/
 artifacts/benchmarks/
 .gp-key
+fuzz/target/
+fuzz/corpus/
+fuzz/Cargo.lock

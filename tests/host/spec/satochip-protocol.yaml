@@ -56,12 +56,12 @@ versions:
       CHANGE_PIN:             {code: 0x44, handler: ChangePIN, data: "[len|old|len|new]", transport: secure_channel}
       UNBLOCK_PIN:            {code: 0x46, handler: UnblockPIN}
       LIST_PINS:              {code: 0x48, handler: ListPINs}
-      LOGOUT_ALL:             {code: 0x60, handler: LogOutAll}
+      LOGOUT_ALL:             {code: 0x60, handler: LogOutAll, transport: plaintext, note: 'resets ALL PINs to unvalidated; no data; response 9000'}
       GET_STATUS:             {code: 0x3C, handler: GetStatus, transport: plaintext, response: "[proto_major|proto_minor|applet_major|applet_minor|PIN0_tries|PUK0_tries|PIN1_tries|PUK1_tries|needs2FA|is_seeded|setup_done|needs_secure_channel]"}
-      CARD_LABEL:             {code: 0x3D, handler: cardLabel}
+      CARD_LABEL:             {code: 0x3D, handler: cardLabel, p2: '0x00=read | 0x01=write', requires: 'PIN0 validated for write', data: '[len(1) | label] for write', response: '[label_bytes] for read', transport: secure_channel}
       BIP32_IMPORT_SEED:      {code: 0x6C, handler: importBIP32Seed, p1: "seed size (<=64)", p2: "0x00", data: "[seed]", requires: "PIN0 validated in session", transport: secure_channel}
-      BIP32_RESET_SEED:       {code: 0x77, handler: resetBIP32Seed}
-      BIP32_GET_AUTHENTIKEY:  {code: 0x73, handler: getBIP32AuthentiKey}
+      BIP32_RESET_SEED:       {code: 0x77, handler: resetBIP32Seed, p1: 'PIN size', data: '[PIN]', requires: 'PIN matches P1-sized slice of pins[0]', transport: secure_channel, note: 'wipes seed, chaincode, authentikey, and all cached keys; card becomes un-seeded'}
+      BIP32_GET_AUTHENTIKEY:  {code: 0x73, handler: getBIP32AuthentiKey, p1: '0x00', p2: '0x00', requires: 'PIN0 validated + seeded', response: '[coordx_size(2) | coordx(32) | sig_size(2) | self-sig(DER, over sha256(0x0020 || coordx))]', transport: secure_channel}
       BIP32_SET_AUTHENTIKEY_PUBKEY: {code: 0x75, handler: setBIP32AuthentikeyPubkey}
       BIP32_GET_EXTENDED_KEY: {code: 0x6D, handler: getBIP32ExtendedKey, p1: "depth", p2: "0x00 full-derivation | 0x40 watch-only | |0x80 no-cache bit", data: "[path: 4B-BE per level]", response: "[chaincode(32) | coordx_size(2) | coordx(32) | sig_size(2) | self-sig | sig_size(2) | authentikey-sig] — self-sig covers sha256(chaincode || 0x0020 || coordx) (66B, NOT the 0x81-style 34; source-read 2026-11-15, the framing every earlier client missed)", transport: secure_channel}
       BIP32_SET_EXTENDED_PUBKEY: {code: 0x74, handler: setBIP32ExtendedPubkey}
@@ -145,7 +145,7 @@ versions:
       GET_RANDOM:             {code: 0x30, handler: getRandom}
       SET_FEATURE_POLICY:     {code: 0x3A, handler: setFeaturePolicy}
       GET_STATUS:             {code: 0x3C, handler: GetStatus, transport: plaintext, response: "12B as v0.14 + feature-policy bytes 12-15"}
-      CARD_LABEL:             {code: 0x3D, handler: cardLabel}
+      CARD_LABEL:             {code: 0x3D, handler: cardLabel, p2: '0x00=read | 0x01=write', requires: 'PIN0 validated for write', data: '[len(1) | label] for write', response: '[label_bytes] for read', transport: secure_channel}
       SET_NFC_POLICY:         {code: 0x3E, handler: setNfcPolicy}
       SET_NDEF:               {code: 0x3F}
       CREATE_PIN:             {code: 0x40, note: "deprecated at dispatch — answers 9C26"}
@@ -153,10 +153,10 @@ versions:
       CHANGE_PIN:             {code: 0x44, handler: ChangePIN}
       UNBLOCK_PIN:            {code: 0x46, handler: UnblockPIN, note: "NEW length-prefixed format; legacy REJECTED"}
       LIST_PINS:              {code: 0x48, note: "deprecated at dispatch — answers 9C26"}
-      LOGOUT_ALL:             {code: 0x60, handler: LogOutAll}
+      LOGOUT_ALL:             {code: 0x60, handler: LogOutAll, transport: plaintext, note: 'resets ALL PINs to unvalidated; no data; response 9000'}
       BIP32_IMPORT_SEED:      {code: 0x6C, handler: importBIP32Seed, transport: secure_channel}
-      BIP32_RESET_SEED:       {code: 0x77, handler: resetBIP32Seed}
-      BIP32_GET_AUTHENTIKEY:  {code: 0x73, handler: getAuthentikey}
+      BIP32_RESET_SEED:       {code: 0x77, handler: resetBIP32Seed, p1: 'PIN size', data: '[PIN]', requires: 'PIN matches P1-sized slice of pins[0]', transport: secure_channel, note: 'wipes seed, chaincode, authentikey, and all cached keys; card becomes un-seeded'}
+      BIP32_GET_AUTHENTIKEY:  {code: 0x73, handler: getAuthentikey, p1: '0x00', p2: '0x00', requires: 'PIN0 validated + seeded', response: '[coordx_size(2) | coordx(32) | sig_size(2) | self-sig]', transport: secure_channel}
       BIP32_SET_AUTHENTIKEY_PUBKEY: {code: 0x75, note: "deprecated at dispatch — answers 9C26"}
       BIP32_GET_EXTENDED_KEY: {code: 0x6D, handler: getBIP32ExtendedKey, transport: secure_channel}
       BIP32_SET_EXTENDED_PUBKEY: {code: 0x74, note: "deprecated at dispatch — answers 9C26"}

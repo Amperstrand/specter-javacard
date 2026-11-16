@@ -1,0 +1,29 @@
+[workspace]
+[package]
+name = "satochip-client-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+satochip-client = { path = ".." }
+k256 = { version = "0.13", features = ["ecdh", "ecdsa"] }
+sha2 = "0.10"
+
+[[bin]]
+name = "init_response"
+path = "fuzz_targets/init_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "unwrap"
+path = "fuzz_targets/unwrap.rs"
+test = false
+doc = false
+bench = false

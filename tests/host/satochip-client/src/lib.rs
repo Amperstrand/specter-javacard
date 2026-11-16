@@ -11,4 +11,7 @@ pub mod channel;
 pub mod client;
 pub mod protocol;
 
+#[cfg(test)]
+mod tests;
+
 pub use client::{Client, Status};

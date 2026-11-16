@@ -121,7 +121,7 @@ impl Client {
                     let ch = self.channel.as_ref().ok_or("channel not open")?;
                     return ch.unwrap(&data).map_err(Into::into);
                 }
-                0x9C20 | 0x9C21 | 0x9C22 | 0x9C23 if attempt == 0 => {
+                0x9C20..=0x9C23 if attempt == 0 => {
                     self.init_secure_channel()?;
                 }
                 _ => return Err(format!("secure op: SW={sw:04X}").into()),
