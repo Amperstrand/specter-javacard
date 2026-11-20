@@ -46,8 +46,11 @@ case "$cmd" in
     git -C "$SRC" checkout --quiet "$UPSTREAM_PIN"
     git -C "$SRC" apply "$HERE/patches/amperstrand-326.patch"
     git -C "$SRC" apply "$HERE/patches/jcardsim-pthread-lock.patch"
+    # HAVE_ARPA_INET_H is an autoconf macro; ifd-vpcd.c gates <arpa/inet.h>
+    # on it. Without it gcc>=14 fails the build (implicit htonl declaration).
     gcc -O2 -fPIC -shared \
       -DHAVE_DECL_MSG_NOSIGNAL=1 -DHAVE_DECL_SO_NOSIGPIPE=0 \
+      -DHAVE_ARPA_INET_H=1 \
       -DHAVE_PTHREAD=1 \
       -DPACKAGE_VERSION='"3.3+jcardsim1"' -DVPCDSLOTS=2 \
       -o "$OUT" \
@@ -65,7 +68,7 @@ case "$cmd" in
     ;;
   deploy)
     [ -f "$OUT" ] || { echo "run 'build' first" >&2; exit 1; }
-    install -m 644 "$OUT" "$DEST"
+    install -D -m 644 "$OUT" "$DEST"
     echo "deployed: $DEST"
     ;;
   setup)
