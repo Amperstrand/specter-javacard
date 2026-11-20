@@ -27,6 +27,9 @@ jobs:
         working-directory: tests/host/satochip-client
     steps:
       - uses: actions/checkout@v4
+      # pcsc-sys needs the PC/SC headers to build its -sys crate
+      - name: Install pcscd headers
+        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
       - uses: dtolnay/rust-toolchain@stable
       - name: Build
         run: cargo build --verbose
