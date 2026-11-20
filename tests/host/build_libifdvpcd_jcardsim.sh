@@ -68,7 +68,7 @@ case "$cmd" in
     ;;
   deploy)
     [ -f "$OUT" ] || { echo "run 'build' first" >&2; exit 1; }
-    install -m 644 "$OUT" "$DEST"
+    install -D -m 644 "$OUT" "$DEST"
     echo "deployed: $DEST"
     ;;
   setup)
